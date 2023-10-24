@@ -1,12 +1,17 @@
 package main
 
 import (
-	"fmt"
 	"image/color"
+	"log"
+	"os"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
+	"github.com/hajimehoshi/ebiten/v2/text"
+	"golang.org/x/image/colornames"
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/opentype"
 )
 
 // @Speed: Don't use a struct for Cell. For index should suffice and
@@ -27,6 +32,8 @@ type Grid struct {
 
 	// @Speed: Can we just use a bitmap?
 	liveCells map[Cell]bool
+
+	run bool
 }
 
 func (g *Grid) draw(screen *ebiten.Image) {
@@ -51,6 +58,7 @@ func (g *Grid) draw(screen *ebiten.Image) {
 	inner := ebiten.NewImage(g.cellSize-g.edgeWidth-1, g.cellSize-g.edgeWidth-1)
 	inner.Fill(color.Black)
 
+	// Go through all the cells
 	for r := 0; r < g.rows; r++ {
 		for c := 0; c < g.cols; c++ {
 			op := &ebiten.DrawImageOptions{}
@@ -61,8 +69,8 @@ func (g *Grid) draw(screen *ebiten.Image) {
 			op.GeoM.Translate(float64(x), float64(y))
 			screen.DrawImage(outer, op)
 
-			c := Cell{x, y}
-			if found := g.liveCells[c]; found {
+			cell := Cell{r, c}
+			if found := g.liveCells[cell]; found {
 				// Don't draw inner rectangle if this is a live cell.
 				// This allows us to see the live cell as a filled rectangle with white color
 			} else {
@@ -72,37 +80,28 @@ func (g *Grid) draw(screen *ebiten.Image) {
 			}
 		}
 	}
-
-	/*
-		for x := 0; x < (screenWidth / g.cellSize); x += 1 {
-			for y := 0; y < (screenHeight / g.cellSize); y += 1 {
-				c := Cell{x, y}
-				op := &ebiten.DrawImageOptions{}
-				op.GeoM.Translate(float64(x*g.cellSize), float64(y*g.cellSize))
-				screen.DrawImage(outer, op)
-
-				if found := g.liveCells[c]; found {
-					// Don't draw inner rectangle if this is a live cell.
-					// This allows us to see the live cell as a filled rectangle with white color
-				} else {
-					op2 := &ebiten.DrawImageOptions{}
-					op2.GeoM.Translate(float64(x*g.cellSize+1), float64(y*g.cellSize+1))
-					screen.DrawImage(inner, op2)
-				}
-			}
-		}
-
-	*/
 }
 
 func (g *Grid) update() {
+	if !g.run {
+		return
+	}
+
+	timeDelta := time.Since(lastUpdatedTime)
+
+	if timeDelta < time.Millisecond*200 {
+		return
+	} else {
+		lastUpdatedTime = time.Now()
+	}
+
 	// @Speed Can we figure out a way not to make a new map everytime?
 	nextGen := make(map[Cell]bool)
+
 	// Go through all the cells
-	for x := 0; x < (screenWidth / g.cellSize); x += 1 {
-		for y := 0; y < (screenHeight / g.cellSize); y += 1 {
-			// Get the neighbours of this cell
-			neighbours := getNeighbours(Cell{x, y})
+	for r := 0; r < g.rows; r++ {
+		for c := 0; c < g.cols; c++ {
+			neighbours := getNeighbours(Cell{r, c})
 
 			liveNeighborCount := 0
 			for i := range neighbours {
@@ -112,19 +111,42 @@ func (g *Grid) update() {
 			}
 
 			// Apply the rules
-			isAlive := g.liveCells[Cell{x, y}]
+			isAlive := g.liveCells[Cell{r, c}]
 			if isAlive && liveNeighborCount == 2 || liveNeighborCount == 3 {
 				// Cell continues to stay alive don't do anything
-				nextGen[Cell{x, y}] = true
+				nextGen[Cell{r, c}] = true
 			} else if !isAlive && liveNeighborCount == 3 {
 				// Cell becomes alive
-				nextGen[Cell{x, y}] = true
+				nextGen[Cell{r, c}] = true
 			} else {
 				// Cell becomes dead
 			}
 		}
 	}
 	g.liveCells = nextGen
+
+}
+
+func (g *Grid) handleKeyEvent(key ebiten.Key) {
+	switch {
+	case key == ebiten.KeyC:
+		// Clear the map
+		g.liveCells = make(map[Cell]bool)
+	case key == ebiten.KeySpace:
+		g.run = !g.run
+	}
+}
+
+func (g *Grid) handleMouseEvent(mx, my int) {
+	x := (mx - g.startX) / g.cellSize
+	y := (my - g.startY) / g.cellSize
+
+	if x < 0 || x >= g.cols || y < 0 || y >= g.rows {
+		// Out of grid area - Do nothing
+		return
+	}
+	c := Cell{x, y}
+	g.liveCells[c] = !g.liveCells[c]
 }
 
 // ---------------- Variables --------------------
@@ -140,7 +162,7 @@ var (
 
 	grid = &Grid{
 		startX: 60,
-		startY: 60,
+		startY: 80,
 
 		rows: 30,
 		cols: 30,
@@ -150,7 +172,53 @@ var (
 
 		liveCells: make(map[Cell]bool),
 	}
+
+	TechnoRaceSmall  font.Face
+	TechnoRaceNormal font.Face
+	TechnoRaceBig    font.Face
 )
+
+// ----------------- Init --------------------
+func init() {
+	fontData, err := os.ReadFile("techno-race.otf")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	tt, err := opentype.Parse(fontData)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	const dpi = 72
+	TechnoRaceSmall, err = opentype.NewFace(tt, &opentype.FaceOptions{
+		Size:    10,
+		DPI:     dpi,
+		Hinting: font.HintingVertical,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	TechnoRaceNormal, err = opentype.NewFace(tt, &opentype.FaceOptions{
+		Size:    14,
+		DPI:     dpi,
+		Hinting: font.HintingVertical,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	TechnoRaceBig, err = opentype.NewFace(tt, &opentype.FaceOptions{
+		Size:    32,
+		DPI:     dpi,
+		Hinting: font.HintingFull, // Use quantization to save glyph cache images.
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Adjust the line height.
+	TechnoRaceBig = text.FaceWithLineHeight(TechnoRaceBig, 32)
+}
 
 // ------------- Utils -------------------------
 
@@ -228,47 +296,60 @@ func (g *Game) Update() error {
 	// @Cleanup
 	mx, my := ebiten.CursorPosition()
 
-	// Grid Coords
-	cx := mx / grid.cellSize
-	cy := my / grid.cellSize
-
 	if repeatingButtonPressed(ebiten.MouseButtonLeft) {
-		cell := Cell{cx, cy}
-		grid.liveCells[cell] = !grid.liveCells[cell]
+		grid.handleMouseEvent(mx, my)
 		return nil
 	}
 
 	if repeatingKeyPressed(ebiten.KeyC) {
-		// Clear the map
-		grid.liveCells = map[Cell]bool{}
+		grid.handleKeyEvent(ebiten.KeyC)
 		return nil
 	}
 
 	if repeatingKeyPressed(ebiten.KeySpace) {
-		fmt.Println("Pressed Space, toggling to", start)
-		start = !start
+		grid.handleKeyEvent(ebiten.KeySpace)
 	}
 
-	if !start {
-		return nil
-	}
-
-	timeDelta := time.Since(lastUpdatedTime)
-
-	if timeDelta < time.Millisecond*200 {
-		return nil
-	} else {
-		lastUpdatedTime = time.Now()
-	}
+	// @Cleanup: The below code should also probably be moved to grid.update()
 
 	grid.update()
 
 	return nil
 }
 
+// https://github.com/sedyh/ebitengine-cheatsheet#center-text
+func DrawCenteredText(screen *ebiten.Image, textFont font.Face, s string, cx, cy int) {
+	// @Cleanup
+	/*
+				bounds, _ := font.BoundString(textFont, s)
+				dx := (bounds.Max.X - bounds.Min.X)
+				dy := (bounds.Max.Y - bounds.Min.Y)
+
+				x, y := fixed.Int26_6(cx)-bounds.Min.X-dx/2, fixed.Int26_6(cy)-bounds.Min.Y-dy/2
+		        text.Draw(screen, s, textFont, int(x), int(y), colornames.Red)
+	*/
+	bounds := text.BoundString(textFont, s)
+	x, y := cx-bounds.Min.X-bounds.Dx()/2, cy-bounds.Min.Y-bounds.Dy()/2
+	text.Draw(screen, s, textFont, x, y, colornames.White)
+}
+
 func (g *Game) Draw(screen *ebiten.Image) {
 	// Background Color
 	// screen.Fill(color.RGBA{255, 255, 255, 0})
+
+	DrawCenteredText(screen, TechnoRaceBig, "GAME OF LIFE", screenWidth/2, 20)
+
+	msg := "Press Space to START or STOP, C to CLEAR"
+	DrawCenteredText(screen, TechnoRaceNormal, msg, screenWidth/2, 50)
+
+	// Draw Status
+	if grid.run {
+		msg = "Status:  Running"
+	} else {
+		msg = "Status:  Stopped"
+	}
+	bounds := text.BoundString(TechnoRaceSmall, msg)
+	text.Draw(screen, msg, TechnoRaceSmall, screenWidth-bounds.Dx()-20, 20, color.White)
 
 	// Draw the grid
 	grid.draw(screen)
